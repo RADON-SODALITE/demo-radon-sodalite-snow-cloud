@@ -1,0 +1,12 @@
+- hosts: all
+  become: yes
+  vars:
+    prefix: "/tmp/test"
+  tasks:  
+    - name: add config files to host
+      block:
+      - file: path={{ prefix }} state=directory
+      - file: path={{ prefix }}/{{ test_file }} state=absent
+      - copy:
+          content: "{{ content }}"
+          dest: "{{ prefix }}/{{ test_file }}"

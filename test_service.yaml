@@ -1,0 +1,231 @@
+tosca_definitions_version: tosca_simple_yaml_1_3
+
+imports:
+  # SODALITE types
+  - sodalite/openstack/openstack_keypair.yaml
+  - sodalite/openstack/openstack_security_rule.yaml
+  - sodalite/openstack/openstack_vm.yaml
+  - sodalite/docker/docker_host.yaml
+  - sodalite/docker/docker_network.yaml
+  
+  # RADON types
+  # TODO: they needed adaptations from absolute to relative paths (e.g. /nodetypes/)
+  # TODO: make it automatic
+  - radon/_definitions/radonnodesnifi__Nifi.tosca
+  - radon/_definitions/radonnodesdatapipelinedestination__PubsS3Bucket.tosca
+  - radon/_definitions/radonnodesdatapipelinesource__ConsumeLocal.tosca
+  - radon/_definitions/radonrelationshipsdatapipeline__ConnectNifiLocal.tosca
+
+node_types:
+
+  sodalite.nodes.TestFile:        
+    derived_from: tosca.nodes.SoftwareComponent
+    properties:
+      test_file:
+        type: string
+        description: Test file name
+        default: "test.txt"
+        required: true
+      content:
+        type: string
+        description: Content of test file
+        default: "This file was created by RADON-SODALITE"
+        required: true
+    interfaces:
+      Standard:
+        type: tosca.interfaces.node.lifecycle.Standard
+        operations:
+          create:      
+            inputs:
+              test_file: { type: string, default: { get_property: [ SELF, test_file ] } }           
+              content: { type: string, default: { get_property: [ SELF, content ] } }           
+            implementation:
+              primary: playbooks/gen_test_data.yml    
+
+topology_template:
+
+  inputs:  
+
+    snow-ssh-key-name:  
+      type: string 
+    snow-ssh-public-key:  
+      type: string 
+    snow-image-name:  
+      type: string 
+    openstack-network-name:  
+      type: string 
+    openstack-floating-ip-pool:  
+      type: string 
+    snow-security-groups:  
+      type: string    
+    snow-flavor-name:  
+      type: string
+    snow-vm-username:
+      type: string 
+    os-env:
+      type: map 
+                 
+    demo-files-path:  
+      type: string
+      default: ""       
+    docker-registry-url: 
+      type: string
+    docker-network: 
+      type: string      
+    docker-registry-cert-country-name:
+      type: string
+      default: ""
+    docker-registry-cert-organization-name: 
+      type: string
+      default: ""
+    docker-registry-cert-email-address: 
+      type: string
+      default: ""
+    mysql-db-pass: 
+      type: string
+      default: ""      
+    mysql-env: 
+      type: map
+
+
+  node_templates: 
+
+    snow-keypair:
+      type: sodalite.nodes.OpenStack.Keypair
+      properties:  
+        name: { get_input: snow-ssh-key-name } 
+        public_key: { get_input: snow-ssh-public-key } 
+        env: { get_input: os-env } 
+
+    snow-security-rules:  
+      type: sodalite.nodes.OpenStack.SecurityRules 
+      properties:  
+        ports:  
+          component_ports:  
+            port_range_max: 8082 # adding new port for NiFi # 8081 
+            remote_ip_prefix: 0.0.0.0/0 
+            port_range_min: 8080 
+            protocol: tcp 
+          http_port:  
+            port_range_min: 80 
+            port_range_max: 80 
+            protocol: tcp 
+            remote_ip_prefix: 0.0.0.0/0 
+          ssh:  
+            protocol: tcp 
+            remote_ip_prefix: 0.0.0.0/0 
+            port_range_min: 22 
+            port_range_max: 22
+        group_name:  snow 
+        group_description:  Snow UC security group 
+        env: { get_input: os-env } 
+
+    snow-vm:  
+      type: sodalite.nodes.OpenStack.VM 
+      properties:  
+        name:  snow-vm
+        key_name:         { get_input: snow-ssh-key-name } 
+        image:            { get_input: snow-image-name }
+        network:          { get_input: openstack-network-name } 
+        security_groups:  { get_input: snow-security-groups } 
+        flavor:           { get_input: snow-flavor-name }
+        username:         { get_input: snow-vm-username }
+        include_exporter: false
+        timeout: 666
+        floating_ip_pools: { get_input: openstack-floating-ip-pool } 
+        env: { get_input: os-env } 
+      requirements:  
+        - protected_by: snow-security-rules
+        - dependency: snow-keypair
+
+    snow-docker-host:  
+      type: sodalite.nodes.DockerHost 
+      requirements:  
+        - host:  snow-vm
+
+    snow-docker-network:
+      type: sodalite.nodes.DockerNetwork
+      properties:  
+        name: { get_input: docker-network }
+      requirements:
+        - host: snow-vm    
+        - dependency: snow-docker-host
+
+    test-data:
+      type: sodalite.nodes.TestFile
+      properties:
+        test_file: "test.txt"
+        content: "This file was created by RADON-SODALITE"
+      requirements:
+        - host: snow-vm
+        - dependency: snow-docker-network # TODO: shall be changed
+
+    # NiFi instance
+    Nifi_0:
+      type: radon.nodes.nifi.Nifi
+      metadata:
+        x: "643"
+        y: "325"
+        displayName: "Nifi"
+      properties:
+        port: 8082 # 8080 port is occupied by snow components # 8080
+        component_version: "1.12.1"
+      requirements:
+        - host:
+            node: snow-vm
+            relationship: con_HostedOn_0
+            capability: host
+        - dependency: test-data # TODO: shall be changed
+
+    # S3 bucket
+    PubsS3Bucket_0:
+      type: radon.nodes.datapipeline.destination.PubsS3Bucket
+      metadata:
+        x: "988"
+        y: "123"
+        displayName: "PubsS3Bucket"
+      properties:
+        BucketName: "kml-test-bucket" # TODO: shall be changed
+        cred_file_path: "/home/kml/.aws/nifi_credentials" # TODO: shall be changed
+        name: "SendToS3" # TODO: shall be changed
+        Region: "eu-central-1"
+      requirements:
+        - host:
+            node: Nifi_0
+            relationship: con_HostedOn_2
+            capability: host
+
+    # Transmission of local file to S3
+    ConsumeLocal_0:
+      type: radon.nodes.datapipeline.source.ConsumeLocal
+      metadata:
+        x: "309"
+        y: "115"
+        displayName: "ConsumeLocal"
+      properties:
+        name: "consumeLocalFolder"
+        directory: "/tmp/test" # TODO: shall be changed
+      requirements:
+        - connectToPipeline:
+            node: PubsS3Bucket_0
+            relationship: con_ConnectNifiLocal_0
+            capability: ConnectToPipeline
+        - host:
+            node: Nifi_0
+            relationship: con_HostedOn_1
+            capability: host
+
+  # RADON relationships templates
+  relationship_templates:
+    con_HostedOn_2:
+      type: tosca.relationships.HostedOn
+    con_HostedOn_0:
+      type: tosca.relationships.HostedOn
+    con_HostedOn_1:
+      type: tosca.relationships.HostedOn
+    con_ConnectNifiLocal_0:
+      type: radon.relationships.datapipeline.ConnectNifiLocal
+
+
+
+
