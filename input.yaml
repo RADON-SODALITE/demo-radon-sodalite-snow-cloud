@@ -15,11 +15,6 @@ os-env:
     EGI_SITE:
 
 
-# ssh-key-name:
-# image-name:
-# openstack-network-name:
-# security-groups:
-# flavor-name:
 docker-network:
 docker-registry-url:
 docker-registry-cert-country-name:

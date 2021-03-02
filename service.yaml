@@ -1,14 +1,28 @@
 tosca_definitions_version: tosca_simple_yaml_1_3
 
-# TODO: imports to RADON node types shall be added
 imports:
-  - modules/openstack/openstack_vm.yaml
-  - modules/docker/docker_host.yaml
-  - modules/docker/docker_network.yaml
-  - modules/docker/docker_registry.yaml
-  - modules/docker/docker_component.yaml
-  - modules/docker/docker_certificate.yaml
-  - modules/docker/docker_volume.yaml
+  # SODALITE types
+  - sodalite/openstack/openstack_keypair.yaml
+  - sodalite/openstack/openstack_security_rule.yaml
+  - sodalite/openstack/openstack_vm.yaml
+  - sodalite/docker/docker_host.yaml
+  - sodalite/docker/docker_network.yaml
+  - sodalite/docker/docker_registry.yaml
+  - sodalite/docker/docker_component.yaml
+  - sodalite/docker/docker_certificate.yaml
+  - sodalite/docker/docker_volume.yaml
+
+  # RADON types
+  - radon/_definitions/radonnodesnifi__Nifi.tosca
+  - radon/_definitions/radonnodesdatapipelinedestination__PubsS3Bucket.tosca
+  - radon/_definitions/radonnodesdatapipelinesource__ConsumeLocal.tosca
+  - radon/_definitions/radonrelationshipsdatapipeline__ConnectNifiLocal.tosca
+  - radon/_definitions/radonnodesaws__AwsS3Bucket.tosca
+  - radon/_definitions/radonnodesaws__AwsLambdaFunction.tosca
+  - radon/_definitions/radonartifactsarchive__JAR.tosca
+  - radon/_definitions/radonnodesaws__AwsPlatform.tosca
+  - radon/_definitions/radonrelationships__ConnectsTo.tosca
+  - radon/_definitions/radonrelationshipsaws__AwsTriggers.tosca
 
 node_types:
 
@@ -30,8 +44,8 @@ node_types:
         operations:
           create:      
             inputs:
-              remote_server: { default: { get_attribute: [ SELF, remote_server, public_address ] } }   
-              mysql_db_pass: { default: { get_property: [ SELF, mysql_db_pass ] } }           
+              remote_server: { type: string, default: { get_attribute: [ SELF, remote_server, public_address ] } }   
+              mysql_db_pass: { type: string, default: { get_property: [ SELF, mysql_db_pass ] } }           
             implementation:
               primary: playbooks/configure_demo.yml
               dependencies: 
@@ -40,16 +54,26 @@ node_types:
 topology_template:
 
   inputs:  
-    ssh-key-name:  
+
+    snow-ssh-key-name:  
       type: string 
-    image-name:  
+    snow-ssh-public-key:  
+      type: string 
+    snow-image-name:  
       type: string 
     openstack-network-name:  
       type: string 
-    security-groups:  
+    openstack-floating-ip-pool:  
+      type: string 
+    snow-security-groups:  
       type: string    
-    flavor-name:  
-      type: string                   
+    snow-flavor-name:  
+      type: string
+    snow-vm-username:
+      type: string 
+    os-env:
+      type: map 
+                 
     demo-files-path:  
       type: string
       default: ""       
@@ -72,10 +96,17 @@ topology_template:
     mysql-env: 
       type: map
 
-
   node_templates: 
 
-    security-rules-snow:  
+### Prepare OpenStack resources
+    snow-keypair:
+      type: sodalite.nodes.OpenStack.Keypair
+      properties:  
+        name: { get_input: snow-ssh-key-name } 
+        public_key: { get_input: snow-ssh-public-key } 
+        env: { get_input: os-env } 
+
+    snow-security-rules:  
       type: sodalite.nodes.OpenStack.SecurityRules 
       properties:  
         ports:  
@@ -89,35 +120,53 @@ topology_template:
             port_range_max: 80 
             protocol: tcp 
             remote_ip_prefix: 0.0.0.0/0 
+          ssh:  
+            protocol: tcp 
+            remote_ip_prefix: 0.0.0.0/0 
+            port_range_min: 22 
+            port_range_max: 22
         group_name:  snow 
         group_description:  Snow UC security group 
+        env: { get_input: os-env } 
 
     snow-vm:  
-      type: sodalite.nodes.OpenStack.VM
+      type: sodalite.nodes.OpenStack.VM 
       properties:  
-        key_name:  { get_input: ssh-key-name } 
-        image:     { get_input: image-name } 
-        name:  snow-vm_am_10
-        network:  { get_input: openstack-network-name } 
-        security_groups:  { get_input: security-groups } 
-        flavor:  { get_input: flavor-name }
-        username: centos
+        name:  snow-vm
+        key_name:         { get_input: snow-ssh-key-name } 
+        image:            { get_input: snow-image-name }
+        network:          { get_input: openstack-network-name } 
+        security_groups:  { get_input: snow-security-groups } 
+        flavor:           { get_input: snow-flavor-name }
+        username:         { get_input: snow-vm-username }
+        include_exporter: false
+        timeout: 666
+        floating_ip_pools: { get_input: openstack-floating-ip-pool } 
+        env: { get_input: os-env } 
       requirements:  
-       - protected_by:  security-rules-snow
+        - protected_by: snow-security-rules
+        - dependency: snow-keypair
 
     snow-vm-2:  
-       type: sodalite.nodes.OpenStack.VM 
-       properties:  
-        key_name:  { get_input: ssh-key-name } 
-        image:     { get_input: image-name } 
-        name:  snow-vm_am_9
-        network:  { get_input: openstack-network-name } 
-        security_groups:  { get_input: security-groups } 
-        flavor:  { get_input: flavor-name }
-        username: centos
-       requirements:  
-        - protected_by:  security-rules-snow     
+      type: sodalite.nodes.OpenStack.VM 
+      properties:  
+        name:  snow-vm-2
+        key_name:         { get_input: snow-ssh-key-name } 
+        image:            { get_input: snow-image-name }
+        network:          { get_input: openstack-network-name } 
+        security_groups:  { get_input: snow-security-groups } 
+        flavor:           { get_input: snow-flavor-name }
+        username:         { get_input: snow-vm-username }
+        include_exporter: false
+        timeout: 666
+        floating_ip_pools: { get_input: openstack-floating-ip-pool } 
+        env: { get_input: os-env } 
+      requirements:  
+        - protected_by: snow-security-rules
+        - dependency: snow-keypair  
 
+
+### Prepare Docker environment
     snow-docker-host:  
       type: sodalite.nodes.DockerHost 
       requirements:  
@@ -161,14 +210,6 @@ topology_template:
         - dependency: snow-docker-registry-certificate
         - dependency: snow-docker-registry-certificate-2
 
-    configuration-demo:
-      type: sodalite.nodes.ConfigurationDemo  
-      properties:  
-        mysql_db_pass: { get_input: mysql-db-pass }    
-      requirements:
-        - host: snow-vm         
-        - remote_server: snow-vm-2        
-
     snow-docker-network:
       type: sodalite.nodes.DockerNetwork
       properties:  
@@ -176,6 +217,16 @@ topology_template:
       requirements:
         - host: snow-vm    
         - dependency: snow-docker-host 
+
+
+### Prepare Snow use case components
+    configuration-demo:
+      type: sodalite.nodes.ConfigurationDemo  
+      properties:  
+        mysql_db_pass: { get_input: mysql-db-pass }    
+      requirements:
+        - host: snow-vm         
+        - remote_server: snow-vm-2  
 
     snow-docker-volume-shots:
       type: sodalite.nodes.DockerVolume
@@ -308,7 +359,8 @@ topology_template:
         - host:  snow-docker-host-2 
         - registry: snow-docker-registry
 
-    #DEMO
+
+### Start the Snow use case
     snow-docker-volume-demo-output:
       type: sodalite.nodes.DockerVolume
       properties:  
@@ -323,8 +375,8 @@ topology_template:
         docker_network_name:  { get_property: [ SELF, network, name ] } 
         image_name:  snow-webcam-mockup:latest 
         alias: snow-webcam-mockup
-        ports:  ['8080:8080'] 
-        exposed_ports:  ['8080'] 
+        ports:  ['8082:8080'] 
+        exposed_ports:  ['8082'] 
       requirements:  
         - host:  snow-docker-host 
         - network: snow-docker-network  
@@ -368,11 +420,9 @@ topology_template:
         - dependency: snow-docker-volume-demo-output
         - registry: snow-docker-registry
   
-# -- Starting a transmission of outputs from snow-vm-2 to S3 -- #
-    
-    # TODO: node types and instances shall be adjusted
 
-    # NiFi instance
+### Data movement from local file system to S3
+    # Nifi instance
     Nifi_0:
       type: radon.nodes.nifi.Nifi
       metadata:
@@ -380,14 +430,14 @@ topology_template:
         y: "325"
         displayName: "Nifi"
       properties:
-        port: 8082 # 8080 port is occupied by snow components # 8080
+        port: 8080 # 8080 port is occupied by snow components # 8080
         component_version: "1.12.1"
       requirements:
         - host:
-            node: snow-vm-2
+            node: snow-vm
             relationship: con_HostedOn_0
             capability: host
-        - dependency: snow-skyline-alignment
+        - dependency: snow-demo-nginx
 
     # S3 bucket
     PubsS3Bucket_0:
@@ -397,10 +447,10 @@ topology_template:
         y: "123"
         displayName: "PubsS3Bucket"
       properties:
-        BucketName: "radon-jakovits" # TODO: shall be changed
-        cred_file_path: "/home/jakovits/aws/credentials" # TODO: shall be changed
+        BucketName: "kml-snow-images-bucket" # TODO: shall be changed
+        cred_file_path: "/home/kml/.aws/nifi_credentials" # TODO: shall be changed
         name: "SendToS3" # TODO: shall be changed
-        Region: "eu-central-1" # TODO: shall be changed
+        Region: "eu-central-1"
       requirements:
         - host:
             node: Nifi_0
@@ -416,7 +466,7 @@ topology_template:
         displayName: "ConsumeLocal"
       properties:
         name: "consumeLocalFolder"
-        directory: "/mnt" # TODO: shall be changed
+        directory: "/var/lib/docker/volumes/snow_volume_demo_output/_data/img" # TODO: shall be changed
       requirements:
         - connectToPipeline:
             node: PubsS3Bucket_0
@@ -427,27 +477,109 @@ topology_template:
             relationship: con_HostedOn_1
             capability: host
 
-# -- End of transmission of outputs from snow-vm-2 to S3 -- #
 
+### Lambda thumbnail generation
+    # orchestrator's aws dependencies to invoke lambda
+    AwsPlatform:
+      type: radon.nodes.aws.AwsPlatform
+      metadata:
+        x: "875"
+        y: "467"
+        displayName: "AwsPlatform"
+      properties:
+        name: "AWS"
+        region: "eu-central-1"
+      requirements:
+        - dependency: ConsumeLocal_0
 
-# -- Starting the thumbnail generation -- #
+    # source bucket with images
+    AwsS3SourceBucket:
+      type: radon.nodes.aws.AwsS3Bucket
+      metadata:
+        x: "437"
+        y: "272"
+        displayName: "SourceBucket"
+      properties:
+        maxsize: "0 MB"
+        name: "kml-snow-images-bucket"
+      requirements:
+        - host:
+            node: AwsPlatform
+            relationship: con_HostedOn_4
+            capability: host
+        - invoker:
+            node: AwsLambdaFunction
+            relationship: con_AwsTriggers_0
+            capability: invocable
 
-# TODO: add templates for the thumbnail generation
+    # thumbnail-lambda-generator
+    AwsLambdaFunction:
+      type: radon.nodes.aws.AwsLambdaFunction
+      metadata:
+        x: "875"
+        y: "93"
+        displayName: "ThumbnailGenerator"
+      properties:
+        handler: "spblab.thumbgen.lambda.ThumbnailGenerationHandler"
+        memory: 256
+        name: "kml-lambda-thumbgen-test"
+        runtime: "java8"
+        alias: "dev"
+        statement_id: "lambda_test_permission01"
+        zip_file: { get_artifact: [ SELF, thumbnail-generator ] }
+        timeout: 300
+        env_vars:
+          THUMBNAIL_BUCKET: "kml-snow-thumbnails-bucket"
+        concurrency: 0
+      requirements:
+        - host:
+            node: AwsPlatform
+            relationship: con_HostedOn_3
+            capability: host
+        - endpoint:
+            node: AwsS3TargetBucket
+            relationship: con_ConnectsTo_0
+            capability: storage_endpoint
+      artifacts:
+        thumbnail-generator:
+          type: radon.artifacts.archive.JAR
+          file: thumbgen/servicetemplates/radon.blueprints/ThumbnailGeneration/files/AwsLambdaFunction/thumbnail-generator/thumbnail-generator-dev.jar
 
-# -- End of the thumbnail generation -- #
+    # target bucket for thumbnails
+    AwsS3TargetBucket:
+      type: radon.nodes.aws.AwsS3Bucket
+      metadata:
+        x: "1294"
+        y: "271"
+        displayName: "TargetBucket"
+      properties:
+        maxsize: "0 MB"
+        name: "kml-snow-thumbnails-bucket"
+      requirements:
+        - host:
+            node: AwsPlatform
+            relationship: con_HostedOn_5
+            capability: host
 
-
-  # RADON relationships templates
+## RADON relationships templates
   relationship_templates:
-    con_HostedOn_2:
-      type: tosca.relationships.HostedOn
     con_HostedOn_0:
       type: tosca.relationships.HostedOn
     con_HostedOn_1:
       type: tosca.relationships.HostedOn
+    con_HostedOn_2:
+      type: tosca.relationships.HostedOn
+    con_HostedOn_3:
+      type: tosca.relationships.HostedOn
+    con_HostedOn_4:
+      type: tosca.relationships.HostedOn
+    con_HostedOn_5:
+      type: tosca.relationships.HostedOn
     con_ConnectNifiLocal_0:
       type: radon.relationships.datapipeline.ConnectNifiLocal
-
-
-
-
+    con_ConnectsTo_0:
+      type: radon.relationships.ConnectsTo
+    con_AwsTriggers_0:
+      type: radon.relationships.aws.AwsTriggers
+      properties:
+        events: "s3:ObjectCreated:*"

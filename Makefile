@@ -1,12 +1,17 @@
 prepare:
 	rm -f sodalite && rm -f radon && \
 	ln -sf ../iac-modules sodalite && \
+	ln -sf ../ThumbnailGeneration radon
+
+prepare-test:
+	rm -f sodalite && rm -f radon && \
+	ln -sf ../iac-modules sodalite && \
 	ln -sf ../localToS3Pipeline radon
 
 deploy: prepare
 	opera deploy -i input.yaml service.yaml
 
-deploy-test: prepare
+deploy-test: prepare-test
 	opera deploy -i input.yaml test_service.yaml
 
 clean:
