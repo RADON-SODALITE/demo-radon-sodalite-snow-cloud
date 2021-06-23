@@ -1,0 +1,22 @@
+- hosts: all
+  become: yes
+  tasks:  
+    - name: add config files to host
+      block:
+      - file:
+          path: "{{ dest_dir_path }}" 
+          state: directory
+      - file:
+          path: "{{ dest_dir_path }}/files" 
+          state: directory
+          owner: www-data
+          group: www-data
+      - copy:
+          src: "{{ item }}"
+          dest: "{{ dest_dir_path }}"
+          mode: 0644
+        loop:
+          - radon.png
+          - sodalite.png
+          - s3.php
+          - s3.py

@@ -49,7 +49,27 @@ node_types:
             implementation:
               primary: playbooks/configure_demo.yml
               dependencies: 
-                - playbooks/config.json.tmpl               
+                - playbooks/config.json.tmpl
+
+  sodalite.nodes.S3GalleryFrontEndConfiguration:        
+    derived_from: tosca.nodes.SoftwareComponent         
+    properties:
+      dest_dir_path:
+        type: string
+    interfaces:
+      Standard:
+        type: tosca.interfaces.node.lifecycle.Standard
+        operations:
+          create: 
+            inputs:
+              dest_dir_path: { type: string, default: { get_property: [ SELF, dest_dir_path ] } }         
+            implementation:
+              primary: playbooks/configure_s3_gallery_frontend.yml
+              dependencies: 
+                - s3-gallery/radon.png
+                - s3-gallery/sodalite.png
+                - s3-gallery/s3.php
+                - s3-gallery/s3.py
 
 topology_template:
 
@@ -76,7 +96,10 @@ topology_template:
                  
     demo-files-path:  
       type: string
-      default: ""       
+      default: ""     
+    s3-gallery-config-path:  
+      type: string
+      default: ""    
     docker-registry-url: 
       type: string
     docker-network: 
@@ -96,8 +119,12 @@ topology_template:
     mysql-env: 
       type: map
 
-  node_templates: 
+    s3-gallery-config-path:  
+      type: string
+    s3-gallery-env:  
+      type: map
 
+  node_templates: 
 ### Prepare OpenStack resources
     snow-keypair:
       type: sodalite.nodes.OpenStack.Keypair
@@ -431,7 +458,7 @@ topology_template:
         displayName: "Nifi"
       properties:
         port: 8080 # 8080 port is occupied by snow components # 8080
-        component_version: "1.12.1"
+        component_version: "1.13.2"
       requirements:
         - host:
             node: snow-vm
@@ -447,7 +474,7 @@ topology_template:
         y: "123"
         displayName: "PubsS3Bucket"
       properties:
-        BucketName: "kml-snow-images-bucket" # TODO: shall be changed
+        BucketName: "snow-uc-processed-images" # TODO: shall be changed
         cred_file_path: "/home/kml/.aws/nifi_credentials" # TODO: shall be changed
         name: "SendToS3" # TODO: shall be changed
         Region: "eu-central-1"
@@ -501,7 +528,7 @@ topology_template:
         displayName: "SourceBucket"
       properties:
         maxsize: "0 MB"
-        name: "kml-snow-images-bucket"
+        name: "snow-uc-processed-images"
       requirements:
         - host:
             node: AwsPlatform
@@ -522,14 +549,14 @@ topology_template:
       properties:
         handler: "spblab.thumbgen.lambda.ThumbnailGenerationHandler"
         memory: 256
-        name: "kml-lambda-thumbgen-test"
+        name: "snow-uc-lambda-thumbnail-generator"
         runtime: "java8"
         alias: "dev"
         statement_id: "lambda_test_permission01"
         zip_file: { get_artifact: [ SELF, thumbnail-generator ] }
         timeout: 300
         env_vars:
-          THUMBNAIL_BUCKET: "kml-snow-thumbnails-bucket"
+          THUMBNAIL_BUCKET: "snow-uc-thumbnails"
         concurrency: 0
       requirements:
         - host:
@@ -543,7 +570,7 @@ topology_template:
       artifacts:
         thumbnail-generator:
           type: radon.artifacts.archive.JAR
-          file: thumbgen/servicetemplates/radon.blueprints/ThumbnailGeneration/files/AwsLambdaFunction/thumbnail-generator/thumbnail-generator-dev.jar
+          file: radon/servicetemplates/radon.blueprints/ThumbnailGeneration/files/AwsLambdaFunction/thumbnail-generator/thumbnail-generator-dev.jar
 
     # target bucket for thumbnails
     AwsS3TargetBucket:
@@ -554,12 +581,38 @@ topology_template:
         displayName: "TargetBucket"
       properties:
         maxsize: "0 MB"
-        name: "kml-snow-thumbnails-bucket"
+        name: "snow-uc-thumbnails"
       requirements:
         - host:
             node: AwsPlatform
             relationship: con_HostedOn_5
             capability: host
+
+    s3-gallery-config:
+      type: sodalite.nodes.S3GalleryFrontEndConfiguration  
+      properties:  
+        dest_dir_path: { get_input: s3-gallery-config-path }    
+      requirements:
+        - host: snow-vm 
+        - dependency: AwsS3TargetBucket
+
+    s3-gallery:  
+      type: sodalite.nodes.DockerizedComponent 
+      properties:  
+        docker_network_name: { get_property: [ SELF, network, name ] } 
+        volumes:  
+        - /tmp/s3-gallery:/var/www/html
+        ports: ['8087:80'] 
+        exposed_ports: ['8087'] 
+        image_name: php:7.2-apache-python3-boto3
+        alias: s3-gallery
+        env: { get_input: s3-gallery-env }
+      requirements:  
+        - host: snow-docker-host 
+        - dependency: s3-gallery-config
+        - network: snow-docker-network 
+        - registry: snow-docker-registry
+
 
 ## RADON relationships templates
   relationship_templates:
